@@ -12,6 +12,7 @@ on:
 jobs:
   build-debug-apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -32,10 +33,23 @@ jobs:
           gradle-version: 8.2.2
 
       - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses || true
+        run: yes | sdkmanager --licenses
+
+      - name: Install required Android SDK packages
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+
+      - name: Verify toolchain
+        run: |
+          java -version
+          gradle -v
+          sdkmanager --list | head -n 40
 
       - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace
+        run: gradle --no-daemon :app:assembleDebug --stacktrace
 
       - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
