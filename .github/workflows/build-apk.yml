@@ -46,7 +46,7 @@ jobs:
         run: |
           java -version
           gradle -v
-          sdkmanager --list | head -n 40
+          sdkmanager --version
 
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug --stacktrace
