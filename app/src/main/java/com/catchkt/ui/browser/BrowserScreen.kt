@@ -30,11 +30,9 @@ import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FileDownload
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -141,7 +139,6 @@ fun BrowserScreen(
                     }
                 )
                 if (isLoading && loadingProgress < 100) {
-                    @Suppress("DEPRECATION")
                     LinearProgressIndicator(
                         progress = loadingProgress / 100f,
                         modifier = Modifier.fillMaxWidth()
@@ -443,7 +440,6 @@ fun DownloadTaskItem(
             val downloaded = progress?.downloadedSize ?: task.downloadedSize
             val total = progress?.totalSize ?: task.totalSize
             if (total > 0 && (progress?.status ?: task.status) == DownloadStatus.DOWNLOADING) {
-                @Suppress("DEPRECATION")
                 LinearProgressIndicator(
                     progress = (downloaded.toFloat() / total).coerceIn(0f, 1f),
                     modifier = Modifier
