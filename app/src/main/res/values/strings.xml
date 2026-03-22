@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CatchKt</string>
+    <string name="notification_channel_download">下載進度</string>
+    <string name="notification_channel_download_desc">顯示檔案下載進度</string>
+</resources>
