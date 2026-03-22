@@ -141,8 +141,9 @@ fun BrowserScreen(
                     }
                 )
                 if (isLoading && loadingProgress < 100) {
+                    @Suppress("DEPRECATION")
                     LinearProgressIndicator(
-                        progress = { loadingProgress / 100f },
+                        progress = loadingProgress / 100f,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -442,8 +443,9 @@ fun DownloadTaskItem(
             val downloaded = progress?.downloadedSize ?: task.downloadedSize
             val total = progress?.totalSize ?: task.totalSize
             if (total > 0 && (progress?.status ?: task.status) == DownloadStatus.DOWNLOADING) {
+                @Suppress("DEPRECATION")
                 LinearProgressIndicator(
-                    progress = { (downloaded.toFloat() / total).coerceIn(0f, 1f) },
+                    progress = (downloaded.toFloat() / total).coerceIn(0f, 1f),
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 8.dp)

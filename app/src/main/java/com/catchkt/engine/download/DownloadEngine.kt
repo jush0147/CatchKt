@@ -223,7 +223,7 @@ class DownloadEngine @Inject constructor(
                 offset += bytesRead
 
                 mutex.withLock {
-                    downloadedPerChunk[chunkIndex] += bytesRead
+                    downloadedPerChunk[chunkIndex] = downloadedPerChunk[chunkIndex] + bytesRead.toLong()
                 }
                 onProgress()
             }
