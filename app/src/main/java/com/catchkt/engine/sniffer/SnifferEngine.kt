@@ -25,33 +25,29 @@ class SnifferEngine @Inject constructor(
     private val _sniffedResources = MutableSharedFlow<SniffedResource>(extraBufferCapacity = 16)
     val sniffedResources: SharedFlow<SniffedResource> = _sniffedResources.asSharedFlow()
 
-    // Concurrency-safe URL tracking: normalized URL -> probe Job
     private val probingUrls = ConcurrentHashMap<String, Job>()
 
-    // All discovered resources (for the UI list)
     private val _discoveredResources = mutableListOf<SniffedResource>()
     val discoveredResources: List<SniffedResource> get() = _discoveredResources.toList()
 
-    // Media MIME type prefixes to detect
     private val mediaTypePrefixes = listOf("video/", "audio/")
 
-    // File extensions that hint at media content
     private val mediaExtensions = setOf(
         "mp4", "webm", "mkv", "avi", "mov", "flv", "wmv", "m4v",
         "mp3", "aac", "ogg", "wav", "flac", "m4a", "wma",
         "ts", "3gp"
     )
 
-    // Extensions to skip (streaming manifests)
     private val unsupportedExtensions = setOf("m3u8", "mpd")
+
+    // Minimum file size to consider as real media (500KB)
+    private val MIN_MEDIA_SIZE = 500_000L
 
     fun onUrlIntercepted(url: String, scope: CoroutineScope) {
         val normalizedUrl = normalizeForDedup(url)
 
-        // Skip if already probing or probed
         if (probingUrls.containsKey(normalizedUrl)) return
 
-        // Quick heuristic: check URL extension
         val pathPart = url.split("?").first().split("#").first()
         val extension = pathPart.substringAfterLast('.', "").lowercase()
         val isUnsupported = extension in unsupportedExtensions
@@ -60,7 +56,6 @@ class SnifferEngine @Inject constructor(
 
         val looksLikeMedia = extension in mediaExtensions
 
-        // Check URL patterns common for media streams
         val urlLower = url.lowercase()
         val hasMediaHint = looksLikeMedia ||
             urlLower.contains("videoplayback") ||
@@ -75,14 +70,14 @@ class SnifferEngine @Inject constructor(
 
         val job = scope.launch {
             try {
-                // Try URL-param extraction first (works for YouTube, etc.)
+                // Try URL-param extraction first (YouTube videoplayback)
                 val fromParams = tryExtractFromUrlParams(url)
                 if (fromParams != null) {
                     addResource(fromParams)
                     return@launch
                 }
 
-                // Fall back to HEAD probe with WebView cookies
+                // Fall back to HTTP probe with WebView cookies
                 probeUrl(url)
             } catch (_: CancellationException) {
                 throw CancellationException()
@@ -94,8 +89,8 @@ class SnifferEngine @Inject constructor(
     }
 
     /**
-     * Extract media info from URL query parameters.
-     * YouTube videoplayback URLs contain mime=, clen=, etc.
+     * Extract media info from YouTube videoplayback URL params.
+     * These URLs contain mime=, clen=, itag= directly.
      */
     private fun tryExtractFromUrlParams(url: String): SniffedResource? {
         val urlLower = url.lowercase()
@@ -114,10 +109,12 @@ class SnifferEngine @Inject constructor(
 
         val contentLength = params["clen"]?.toLongOrNull() ?: -1L
 
-        // Skip tiny files
-        if (contentLength in 1..50_000) return null
+        // Skip small files (likely ads, previews, tracking)
+        if (contentLength in 1 until MIN_MEDIA_SIZE) return null
 
-        val fileName = extractFileName(url, mime)
+        val itag = params["itag"] ?: ""
+        val quality = itagToQuality(itag)
+        val fileName = buildYouTubeFileName(mime, quality, itag)
 
         return SniffedResource(
             url = url,
@@ -140,55 +137,98 @@ class SnifferEngine @Inject constructor(
 
     private suspend fun probeUrl(url: String) {
         withContext(Dispatchers.IO) {
-            val requestBuilder = Request.Builder()
+            val cookies = try {
+                CookieManager.getInstance().getCookie(url)
+            } catch (_: Exception) {
+                null
+            }
+
+            // Try HEAD first, then GET with Range: bytes=0-0 as fallback
+            val contentType: String
+            val contentLength: Long
+
+            val headResult = tryHead(url, cookies)
+            if (headResult != null) {
+                contentType = headResult.first
+                contentLength = headResult.second
+            } else {
+                // HEAD failed - try GET with Range to just get headers
+                val getResult = tryGetRange(url, cookies) ?: return@withContext
+                contentType = getResult.first
+                contentLength = getResult.second
+            }
+
+            val isMedia = mediaTypePrefixes.any { contentType.startsWith(it) }
+            if (!isMedia) return@withContext
+
+            // Skip tiny files
+            if (contentLength in 1 until MIN_MEDIA_SIZE) return@withContext
+
+            val fileName = extractFileName(url, contentType)
+
+            addResource(
+                SniffedResource(
+                    url = url,
+                    contentType = contentType,
+                    contentLength = contentLength,
+                    fileName = fileName
+                )
+            )
+        }
+    }
+
+    private fun tryHead(url: String, cookies: String?): Pair<String, Long>? {
+        return try {
+            val builder = Request.Builder()
                 .url(url)
                 .head()
-                .header(
-                    "User-Agent",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                )
-
-            // Pass cookies from WebView's CookieManager
-            try {
-                val cookies = CookieManager.getInstance().getCookie(url)
-                if (!cookies.isNullOrBlank()) {
-                    requestBuilder.header("Cookie", cookies)
-                }
-            } catch (_: Exception) {
-                // CookieManager might not be initialized
+                .header("User-Agent", UA)
+            if (!cookies.isNullOrBlank()) {
+                builder.header("Cookie", cookies)
             }
-
-            val request = requestBuilder.build()
-            val response = okHttpClient.newCall(request).execute()
+            val response = okHttpClient.newCall(builder.build()).execute()
             response.use { resp ->
-                if (!resp.isSuccessful) return@withContext
-
-                val contentType = resp.header("Content-Type")?.lowercase() ?: return@withContext
-                val contentLength = resp.header("Content-Length")?.toLongOrNull() ?: -1L
-
-                val isMedia = mediaTypePrefixes.any { contentType.startsWith(it) }
-                if (!isMedia) return@withContext
-
-                // Skip tiny files (tracking pixels, etc.)
-                if (contentLength in 1..50_000) return@withContext
-
-                val fileName = extractFileName(url, contentType)
-
-                addResource(
-                    SniffedResource(
-                        url = url,
-                        contentType = contentType,
-                        contentLength = contentLength,
-                        fileName = fileName
-                    )
-                )
+                if (!resp.isSuccessful) return null
+                val ct = resp.header("Content-Type")?.lowercase() ?: return null
+                val cl = resp.header("Content-Length")?.toLongOrNull() ?: -1L
+                ct to cl
             }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun tryGetRange(url: String, cookies: String?): Pair<String, Long>? {
+        return try {
+            val builder = Request.Builder()
+                .url(url)
+                .get()
+                .header("User-Agent", UA)
+                .header("Range", "bytes=0-0")
+            if (!cookies.isNullOrBlank()) {
+                builder.header("Cookie", cookies)
+            }
+            val response = okHttpClient.newCall(builder.build()).execute()
+            response.use { resp ->
+                if (!resp.isSuccessful && resp.code != 206) return null
+                val ct = resp.header("Content-Type")?.lowercase() ?: return null
+                // For 206 responses, Content-Range header has the total size
+                val contentRange = resp.header("Content-Range")
+                val cl = if (contentRange != null) {
+                    // Format: bytes 0-0/TOTAL_SIZE
+                    contentRange.substringAfter('/', "").toLongOrNull() ?: -1L
+                } else {
+                    resp.header("Content-Length")?.toLongOrNull() ?: -1L
+                }
+                ct to cl
+            }
+        } catch (_: Exception) {
+            null
         }
     }
 
     private suspend fun addResource(resource: SniffedResource) {
-        // Avoid duplicates by fileName + contentType
+        // Dedup: same contentType + same known size = duplicate
         val isDuplicate = _discoveredResources.any {
             it.contentType == resource.contentType &&
                 it.contentLength == resource.contentLength &&
@@ -198,6 +238,70 @@ class SnifferEngine @Inject constructor(
 
         _discoveredResources.add(resource)
         _sniffedResources.emit(resource)
+    }
+
+    /**
+     * Map YouTube itag to human-readable quality string.
+     */
+    private fun itagToQuality(itag: String): String {
+        return when (itag) {
+            // Video + Audio (progressive)
+            "18" -> "360p"
+            "22" -> "720p"
+            "37" -> "1080p"
+            "38" -> "4K"
+            // Video only (DASH)
+            "133" -> "240p"
+            "134" -> "360p"
+            "135" -> "480p"
+            "136" -> "720p"
+            "137" -> "1080p"
+            "138" -> "4K"
+            "160" -> "144p"
+            "264" -> "1440p"
+            "266" -> "2160p"
+            "298" -> "720p60"
+            "299" -> "1080p60"
+            "302" -> "720p60"
+            "303" -> "1080p60"
+            // VP9 video only
+            "242" -> "240p"
+            "243" -> "360p"
+            "244" -> "480p"
+            "247" -> "720p"
+            "248" -> "1080p"
+            "271" -> "1440p"
+            "313" -> "2160p"
+            "315" -> "2160p60"
+            // Audio only
+            "139" -> "48kbps"
+            "140" -> "128kbps"
+            "141" -> "256kbps"
+            "171" -> "128kbps"
+            "172" -> "256kbps"
+            "249" -> "50kbps"
+            "250" -> "70kbps"
+            "251" -> "160kbps"
+            else -> ""
+        }
+    }
+
+    private fun buildYouTubeFileName(mime: String, quality: String, itag: String): String {
+        val ext = when {
+            mime.contains("mp4") -> "mp4"
+            mime.contains("webm") -> "webm"
+            mime.contains("mp4a") || mime.contains("aac") || mime.contains("m4a") -> "m4a"
+            mime.contains("mpeg") -> "mp3"
+            mime.contains("ogg") || mime.contains("opus") -> "ogg"
+            else -> "bin"
+        }
+        val typeLabel = when {
+            mime.startsWith("video/") -> "影片"
+            mime.startsWith("audio/") -> "音訊"
+            else -> "媒體"
+        }
+        val qualityStr = if (quality.isNotEmpty()) " $quality" else ""
+        return "YouTube_${typeLabel}${qualityStr}.$ext"
     }
 
     private fun extractFileName(url: String, contentType: String): String {
@@ -222,15 +326,9 @@ class SnifferEngine @Inject constructor(
             "media_${System.currentTimeMillis()}.$ext"
         }
 
-        // Sanitize filename
         return baseName.replace(Regex("[^a-zA-Z0-9._\\-]"), "_")
     }
 
-    /**
-     * Normalize URL for deduplication.
-     * For videoplayback URLs, use mime+clen as the key to avoid
-     * treating the same stream with different tokens as different.
-     */
     private fun normalizeForDedup(url: String): String {
         val urlLower = url.lowercase()
         if (urlLower.contains("videoplayback")) {
@@ -251,5 +349,11 @@ class SnifferEngine @Inject constructor(
         }
         probingUrls.clear()
         _discoveredResources.clear()
+    }
+
+    companion object {
+        private const val UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 }

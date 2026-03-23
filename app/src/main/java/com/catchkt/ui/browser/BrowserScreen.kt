@@ -124,7 +124,7 @@ fun BrowserScreen(
         bottomBar = {
             BottomNavigationBar(
                 webView = webView,
-                downloadCount = downloadTasks.size,
+                downloadCount = sniffedResources.size + downloadTasks.size,
                 onDownloadListClick = { viewModel.toggleDownloadList() }
             )
         }

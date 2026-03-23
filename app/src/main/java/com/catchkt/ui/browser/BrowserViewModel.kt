@@ -48,7 +48,8 @@ class BrowserViewModel @Inject constructor(
         viewModelScope.launch {
             snifferEngine.sniffedResources.collect { resource ->
                 _sniffedResources.value = snifferEngine.discoveredResources
-                _showDownloadSheet.value = true
+                // Don't auto-show sheet - just update badge count
+                // User can tap the download button to see detected resources
             }
         }
     }
@@ -61,7 +62,9 @@ class BrowserViewModel @Inject constructor(
         _currentUrl.value = url
         _isLoading.value = true
         _loadingProgress.value = 0
-        // Clear sniffed resources for new page
+    }
+
+    fun clearSniffedResources() {
         snifferEngine.clearHistory()
         _sniffedResources.value = emptyList()
     }
