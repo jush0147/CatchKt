@@ -33,8 +33,8 @@ class BrowserViewModel @Inject constructor(
     private val _loadingProgress = MutableStateFlow(0)
     val loadingProgress: StateFlow<Int> = _loadingProgress.asStateFlow()
 
-    private val _latestSniffedResource = MutableStateFlow<SniffedResource?>(null)
-    val latestSniffedResource: StateFlow<SniffedResource?> = _latestSniffedResource.asStateFlow()
+    private val _sniffedResources = MutableStateFlow<List<SniffedResource>>(emptyList())
+    val sniffedResources: StateFlow<List<SniffedResource>> = _sniffedResources.asStateFlow()
 
     private val _showDownloadSheet = MutableStateFlow(false)
     val showDownloadSheet: StateFlow<Boolean> = _showDownloadSheet.asStateFlow()
@@ -47,7 +47,7 @@ class BrowserViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             snifferEngine.sniffedResources.collect { resource ->
-                _latestSniffedResource.value = resource
+                _sniffedResources.value = snifferEngine.discoveredResources
                 _showDownloadSheet.value = true
             }
         }
@@ -61,6 +61,9 @@ class BrowserViewModel @Inject constructor(
         _currentUrl.value = url
         _isLoading.value = true
         _loadingProgress.value = 0
+        // Clear sniffed resources for new page
+        snifferEngine.clearHistory()
+        _sniffedResources.value = emptyList()
     }
 
     fun onPageFinished() {
@@ -79,8 +82,6 @@ class BrowserViewModel @Inject constructor(
     fun dismissDownloadSheet() {
         _showDownloadSheet.value = false
     }
-
-    fun getSniffedResource(): SniffedResource? = _latestSniffedResource.value
 
     fun toggleDownloadList() {
         _showDownloadSheet.value = !_showDownloadSheet.value

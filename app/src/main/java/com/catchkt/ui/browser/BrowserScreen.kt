@@ -43,19 +43,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,7 +63,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.catchkt.data.model.DownloadStatus
 import com.catchkt.data.model.SniffedResource
 import com.catchkt.service.DownloadService
-import kotlinx.coroutines.launch
 
 private const val DESKTOP_USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -82,36 +76,17 @@ fun BrowserScreen(
     val currentUrl by viewModel.currentUrl.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val loadingProgress by viewModel.loadingProgress.collectAsState()
-    val latestResource by viewModel.latestSniffedResource.collectAsState()
+    val sniffedResources by viewModel.sniffedResources.collectAsState()
     val showSheet by viewModel.showDownloadSheet.collectAsState()
     val downloadTasks by viewModel.downloadTasks.collectAsState()
     val progressMap by viewModel.downloadProgress.collectAsState()
 
     val context = LocalContext.current
-    val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
 
     var urlInput by remember { mutableStateOf(currentUrl) }
     var webView by remember { mutableStateOf<WebView?>(null) }
 
-    // Show snackbar when a resource is sniffed
-    LaunchedEffect(latestResource) {
-        latestResource?.let { resource ->
-            val sizeStr = formatFileSize(resource.contentLength)
-            val result = snackbarHostState.showSnackbar(
-                message = "發現媒體資源: ${resource.fileName} ($sizeStr)",
-                actionLabel = "下載"
-            )
-            if (result == SnackbarResult.ActionPerformed) {
-                context.startForegroundService(
-                    DownloadService.startDownload(context, resource)
-                )
-            }
-        }
-    }
-
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             Column {
                 TopAppBar(
@@ -184,12 +159,11 @@ fun BrowserScreen(
             DownloadListSheet(
                 tasks = downloadTasks,
                 progressMap = progressMap,
-                latestResource = latestResource,
+                sniffedResources = sniffedResources,
                 onDownloadResource = { resource ->
                     context.startForegroundService(
                         DownloadService.startDownload(context, resource)
                     )
-                    viewModel.dismissDownloadSheet()
                 },
                 onPause = { taskId ->
                     context.startService(DownloadService.pauseDownload(context, taskId))
@@ -305,7 +279,7 @@ fun BottomNavigationBar(
 fun DownloadListSheet(
     tasks: List<com.catchkt.data.model.DownloadTask>,
     progressMap: Map<Long, com.catchkt.engine.download.DownloadProgress>,
-    latestResource: SniffedResource?,
+    sniffedResources: List<SniffedResource>,
     onDownloadResource: (SniffedResource) -> Unit,
     onPause: (Long) -> Unit,
     onResume: (Long) -> Unit
@@ -321,53 +295,61 @@ fun DownloadListSheet(
             modifier = Modifier.padding(bottom = 16.dp)
         )
 
-        // Show latest sniffed resource if available
-        latestResource?.let { resource ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp)
-            ) {
-                Row(
+        // Show all sniffed resources
+        if (sniffedResources.isNotEmpty()) {
+            Text(
+                "偵測到的媒體資源",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            sniffedResources.forEach { resource ->
+                Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(bottom = 8.dp)
                 ) {
-                    Icon(
-                        Icons.Default.Download,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            resource.fileName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Download,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
                         )
-                        Text(
-                            "${resource.contentType} - ${formatFileSize(resource.contentLength)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Button(onClick = { onDownloadResource(resource) }) {
-                        Text("下載")
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                resource.fileName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                "${resource.contentType} - ${formatFileSize(resource.contentLength)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Button(onClick = { onDownloadResource(resource) }) {
+                            Text("下載")
+                        }
                     }
                 }
             }
+            Spacer(modifier = Modifier.height(16.dp))
         }
 
-        if (tasks.isEmpty()) {
+        // Download tasks section
+        if (tasks.isNotEmpty()) {
             Text(
-                "尚無下載任務",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 24.dp)
+                "下載任務",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(bottom = 8.dp)
             )
-        } else {
             LazyColumn {
                 items(tasks, key = { it.id }) { task ->
                     val progress = progressMap[task.id]
@@ -379,6 +361,15 @@ fun DownloadListSheet(
                     )
                 }
             }
+        }
+
+        if (sniffedResources.isEmpty() && tasks.isEmpty()) {
+            Text(
+                "尚無下載任務",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 24.dp)
+            )
         }
 
         Spacer(modifier = Modifier.height(32.dp))
